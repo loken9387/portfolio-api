@@ -76,11 +76,16 @@
         <version>3.2.13</version>
     </dependency>
 
-    <!-- ZeroMQ (pure Java) -->
+    <!-- Protobuf and ZeroMQ (native libzmq binding) -->
+    <dependency>
+        <groupId>com.google.protobuf</groupId>
+        <artifactId>protobuf-java</artifactId>
+        <version>3.25.3</version>
+    </dependency>
     <dependency>
         <groupId>org.zeromq</groupId>
         <artifactId>jzmq</artifactId>
-        <version>3.1.0</version>
+        <version>3.1.1</version>
     </dependency>
 
     <!-- Jackson add-ons -->
@@ -96,6 +101,34 @@
 
   <build>
     <plugins>
+      <!-- OS detection for protobuf compiler resolution -->
+      <plugin>
+          <groupId>kr.motd.maven</groupId>
+          <artifactId>os-maven-plugin</artifactId>
+          <version>1.7.0</version>
+          <extensions>true</extensions>
+      </plugin>
+
+      <!-- Protobuf code generation -->
+      <plugin>
+          <groupId>org.xolstice.maven.plugins</groupId>
+          <artifactId>protobuf-maven-plugin</artifactId>
+          <version>0.6.1</version>
+          <configuration>
+              <protocArtifact>com.google.protobuf:protoc:3.25.3:exe:${os.detected.classifier}</protocArtifact>
+          </configuration>
+          <executions>
+              <execution>
+                  <goals>
+                      <goal>compile</goal>
+                  </goals>
+                  <configuration>
+                      <protoSourceRoot>${project.basedir}/src/main/proto</protoSourceRoot>
+                  </configuration>
+              </execution>
+          </executions>
+      </plugin>
+
       <!-- Spring Boot plugin -->
       <plugin>
           <groupId>org.springframework.boot</groupId>
