@@ -6,9 +6,14 @@ import com.frausto.model.docker.entity.DockerServiceConfig;
 import com.frausto.model.docker.entity.DockerVolumeMapping;
 import com.frausto.repository.DockerRepository;
 import com.frausto.service.util.InstanceTracker;
+import com.frausto.service.zmq.DockerStatusPublisher;
+import com.frausto.proto.DockerContainerStatus;
+import com.frausto.proto.DockerStatusEvent;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerResponse;
+import com.github.dockerjava.api.command.InspectContainerResponse;
+import com.github.dockerjava.api.command.ListContainersCmd;
 import com.github.dockerjava.api.exception.DockerException;
 import com.github.dockerjava.api.model.*;
 import org.slf4j.Logger;
@@ -34,10 +39,15 @@ public class DockerService {
     /* Docker service config repo */
     private final DockerRepository dockerRepo;
 
-    public DockerService(DockerClient dockerClient, InstanceTracker instanceTracker, DockerRepository dockerRepository) {
+    /* ZeroMQ publisher for broadcasting status updates */
+    private final DockerStatusPublisher statusPublisher;
+
+    public DockerService(DockerClient dockerClient, InstanceTracker instanceTracker, DockerRepository dockerRepository,
+                         DockerStatusPublisher statusPublisher) {
         this.dockerClient = dockerClient;
         this.instanceTracker = instanceTracker;
         this.dockerRepo = dockerRepository;
+        this.statusPublisher = statusPublisher;
     }
 
     public String startContainer(Long configId) {
@@ -52,6 +62,20 @@ public class DockerService {
         // Optional Container Name
         if (cfg.getContainerName() != null && !cfg.getContainerName().isBlank()) {
             cmd.withName(instanceTracker.generateReusedName(cfg.getContainerName()));
+        }
+
+        // Container labels help us correlate configs to running containers
+        Map<String, String> labels = new HashMap<>();
+        labels.put("portfolio.config.id", String.valueOf(cfg.getId()));
+        labels.put("portfolio.config.name", cfg.getName());
+        cmd.withLabels(labels);
+
+        // Entrypoint/command overrides
+        if (cfg.getEntrypoint() != null && !cfg.getEntrypoint().isBlank()) {
+            cmd.withEntrypoint(splitArgs(cfg.getEntrypoint()));
+        }
+        if (cfg.getCommand() != null && !cfg.getCommand().isBlank()) {
+            cmd.withCmd(splitArgs(cfg.getCommand()));
         }
 
         List<String> envList = buildEnvList(cfg);
@@ -91,6 +115,15 @@ public class DockerService {
             hostConfig.withNetworkMode(cfg.getNetworkMode());
         }
 
+        // Custom network attachment (optional)
+        if (cfg.getNetworkName() != null && !cfg.getNetworkName().isBlank()) {
+            NetworkingConfig networkingConfig = new NetworkingConfig();
+            networkingConfig.withEndpointsConfig(Map.of(
+                    cfg.getNetworkName(), new EndpointConfig()
+            ));
+            cmd.withNetworkingConfig(networkingConfig);
+        }
+
         cmd.withHostConfig(hostConfig);
 
         try {
@@ -106,6 +139,125 @@ public class DockerService {
             // wrap or rethrow as your domain exception
             throw new RuntimeException("Failed to start container from config " + configId, e);
         }
+    }
+
+    public void removeContainersForConfig(Long configId, boolean force) {
+        List<InspectContainerResponse> containers = findContainersByConfig(configId, true);
+        for (InspectContainerResponse container : containers) {
+            String containerId = container.getId();
+            try {
+                dockerClient.removeContainerCmd(containerId)
+                        .withForce(force)
+                        .withRemoveVolumes(true)
+                        .exec();
+                log.info("Removed container {} for config {}", containerId, configId);
+            } catch (DockerException e) {
+                throw new RuntimeException("Failed to remove container " + containerId + " for config " + configId, e);
+            }
+        }
+    }
+
+    public List<DockerContainerStatus> getContainerStatuses() {
+        Map<Long, DockerServiceConfig> configsById = dockerRepo.findAll()
+                .stream()
+                .collect(Collectors.toMap(DockerServiceConfig::getId, c -> c));
+
+        List<InspectContainerResponse> inspectedContainers = findContainersByConfig(null, true);
+
+        Map<Long, List<InspectContainerResponse>> containersByConfig = inspectedContainers.stream()
+                .collect(Collectors.groupingBy(c -> Long.parseLong(c.getConfig().getLabels().get("portfolio.config.id"))));
+
+        List<DockerContainerStatus> statuses = new ArrayList<>();
+
+        for (InspectContainerResponse container : inspectedContainers) {
+            Long cfgId = Long.parseLong(container.getConfig().getLabels().get("portfolio.config.id"));
+            DockerServiceConfig cfg = configsById.get(cfgId);
+            statuses.add(buildStatus(cfg, container));
+        }
+
+        for (Map.Entry<Long, DockerServiceConfig> entry : configsById.entrySet()) {
+            Long cfgId = entry.getKey();
+            if (!containersByConfig.containsKey(cfgId)) {
+                statuses.add(buildMissingStatus(entry.getValue()));
+            }
+        }
+
+        return statuses;
+    }
+
+    public DockerStatusEvent broadcastContainerStatuses() {
+        List<DockerContainerStatus> statuses = getContainerStatuses();
+        return statusPublisher.publishStatuses(statuses);
+    }
+
+    private DockerContainerStatus buildStatus(DockerServiceConfig cfg, InspectContainerResponse container) {
+        InspectContainerResponse.ContainerState state = container.getState();
+        boolean running = Boolean.TRUE.equals(state.getRunning());
+        boolean expectedRunning = isExpectedToRun(cfg);
+        boolean pid1Running = state.getPid() != null && state.getPid() > 1;
+
+        DockerContainerStatus.Builder builder = DockerContainerStatus.newBuilder()
+                .setRunning(running)
+                .setExpectedRunning(expectedRunning)
+                .setPid1Running(pid1Running)
+                .setAttentionNeeded(!running && expectedRunning);
+
+        if (cfg != null) {
+            builder.setConfigId(cfg.getId())
+                    .setConfigName(cfg.getName());
+        }
+
+        if (container.getId() != null) {
+            builder.setContainerId(container.getId());
+        }
+        if (container.getName() != null) {
+            builder.setContainerName(container.getName());
+        }
+        if (state.getStatus() != null) {
+            builder.setStatus(state.getStatus());
+        }
+
+        return builder.build();
+    }
+
+    private DockerContainerStatus buildMissingStatus(DockerServiceConfig cfg) {
+        boolean expectedRunning = isExpectedToRun(cfg);
+        return DockerContainerStatus.newBuilder()
+                .setConfigId(cfg.getId())
+                .setConfigName(cfg.getName())
+                .setStatus("not_created")
+                .setRunning(false)
+                .setExpectedRunning(expectedRunning)
+                .setPid1Running(false)
+                .setAttentionNeeded(expectedRunning)
+                .build();
+    }
+
+    private boolean isExpectedToRun(DockerServiceConfig cfg) {
+        return cfg.getRestartPolicy() != null && !cfg.getRestartPolicy().isBlank() &&
+                !cfg.getRestartPolicy().equalsIgnoreCase("no");
+    }
+
+    private List<InspectContainerResponse> findContainersByConfig(Long configId, boolean includeStopped) {
+        ListContainersCmd listCmd = dockerClient.listContainersCmd().withShowAll(includeStopped);
+        if (configId != null) {
+            listCmd.withLabelFilter(Map.of("portfolio.config.id", String.valueOf(configId)));
+        } else {
+            listCmd.withLabelFilter(Map.of("portfolio.config.id", ""));
+        }
+
+        List<Container> containers = listCmd.exec();
+        List<InspectContainerResponse> inspected = new ArrayList<>();
+        for (Container container : containers) {
+            inspected.add(dockerClient.inspectContainerCmd(container.getId()).exec());
+        }
+        return inspected;
+    }
+
+    private List<String> splitArgs(String raw) {
+        return Arrays.stream(raw.trim().split("\\s+"))
+                .filter(s -> !s.isBlank())
+                .collect(Collectors.toList());
     }
 
     private List<String> buildEnvList(DockerServiceConfig cfg) {
@@ -189,7 +341,8 @@ public class DockerService {
                     ? "rw"
                     : vm.getMode().toLowerCase(Locale.ROOT);
 
-            Bind bind = new Bind(vm.getHostPathOrVolume(), volume, Boolean.valueOf(mode));
+            AccessMode accessMode = mode.equals("ro") ? AccessMode.ro : AccessMode.rw;
+            Bind bind = new Bind(vm.getHostPathOrVolume(), volume, accessMode);
             binds.add(bind);
         }
         return binds;
