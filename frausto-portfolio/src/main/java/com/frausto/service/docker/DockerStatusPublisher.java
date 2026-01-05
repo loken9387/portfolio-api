@@ -1,7 +1,8 @@
-package com.frausto.service.zmq;
+package com.frausto.service.docker;
 
-import com.frausto.proto.DockerContainerStatus;
-import com.frausto.proto.DockerStatusEvent;
+import com.frausto.proto.service.DockerContainerStatus;
+import com.frausto.proto.service.DockerStatusEvent;
+import com.frausto.service.zmq.ZMQWrapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -14,19 +15,17 @@ import java.util.List;
 public class DockerStatusPublisher {
     private static final Logger log = LoggerFactory.getLogger(DockerStatusPublisher.class);
 
-    private final ZmqWrapper zmqWrapper;
+    private final ZMQWrapper zmqWrapper;
     private final String socketName;
     private final String topic;
 
     public DockerStatusPublisher(
-            ZmqWrapper zmqWrapper,
-            @Value("${docker.status.pubEndpoint:tcp://*:5556}") String pubEndpoint,
-            @Value("${docker.status.topic:docker.status}") String topic,
-            @Value("${docker.status.pubSocketName:docker-status-pub}") String socketName) {
+            ZMQWrapper zmqWrapper,
+            @Value("${docker.status.pubEndpoint:tcp://*:5556}") String pubEndpoint) {
         this.zmqWrapper = zmqWrapper;
-        this.socketName = socketName;
-        this.topic = topic;
-        this.zmqWrapper.registerPublisher(socketName, pubEndpoint);
+        this.socketName = "docker-status-pub";
+        this.topic = "docker.status";
+        this.zmqWrapper.addSocket(socketName, pubEndpoint, "PUB", true);
         log.info("Docker status publisher bound to {} on topic {} (socket {})", pubEndpoint, topic, socketName);
     }
 
@@ -36,7 +35,7 @@ public class DockerStatusPublisher {
                 .setGeneratedAtEpochMs(Instant.now().toEpochMilli())
                 .build();
 
-        zmqWrapper.send(socketName, topic, event.toByteArray());
+        zmqWrapper.send(socketName, topic, event);
         return event;
     }
 }

@@ -6,9 +6,8 @@ import com.frausto.model.docker.entity.DockerServiceConfig;
 import com.frausto.model.docker.entity.DockerVolumeMapping;
 import com.frausto.repository.DockerRepository;
 import com.frausto.service.util.InstanceTracker;
-import com.frausto.service.zmq.DockerStatusPublisher;
-import com.frausto.proto.DockerContainerStatus;
-import com.frausto.proto.DockerStatusEvent;
+import com.frausto.proto.service.DockerContainerStatus;
+import com.frausto.proto.service.DockerStatusEvent;
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.CreateContainerCmd;
 import com.github.dockerjava.api.command.CreateContainerResponse;
@@ -59,9 +58,11 @@ public class DockerService {
         // Base create command with image
         CreateContainerCmd cmd = dockerClient.createContainerCmd(cfg.getImage());
 
-        // Optional Container Name
+        String effectiveName = null;
         if (cfg.getContainerName() != null && !cfg.getContainerName().isBlank()) {
-            cmd.withName(instanceTracker.generateReusedName(cfg.getContainerName()));
+            effectiveName = instanceTracker.generateReusedName(cfg.getContainerName());
+            cmd.withName(effectiveName);
+            cmd.withHostName(effectiveName);
         }
 
         // Container labels help us correlate configs to running containers
@@ -113,15 +114,8 @@ public class DockerService {
         // Network mode (optional)
         if (cfg.getNetworkMode() != null && !cfg.getNetworkMode().isBlank()) {
             hostConfig.withNetworkMode(cfg.getNetworkMode());
-        }
-
-        // Custom network attachment (optional)
-        if (cfg.getNetworkName() != null && !cfg.getNetworkName().isBlank()) {
-            NetworkingConfig networkingConfig = new NetworkingConfig();
-            networkingConfig.withEndpointsConfig(Map.of(
-                    cfg.getNetworkName(), new EndpointConfig()
-            ));
-            cmd.withNetworkingConfig(networkingConfig);
+        } else if (cfg.getNetworkName() != null && !cfg.getNetworkName().isBlank()) {
+            hostConfig.withNetworkMode(cfg.getNetworkName().trim());
         }
 
         cmd.withHostConfig(hostConfig);
