@@ -1,5 +1,9 @@
 package com.frausto.service.docker;
 
+import com.frausto.model.docker.dto.DockerEnvVarRequest;
+import com.frausto.model.docker.dto.DockerPortMappingRequest;
+import com.frausto.model.docker.dto.DockerServiceConfigRequest;
+import com.frausto.model.docker.dto.DockerVolumeMappingRequest;
 import com.frausto.model.docker.entity.DockerEnvVar;
 import com.frausto.model.docker.entity.DockerPortMapping;
 import com.frausto.model.docker.entity.DockerServiceConfig;
@@ -18,9 +22,14 @@ import com.github.dockerjava.api.model.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 /**
  * DockerService defines the contract for managing Docker-based service configurations.
@@ -41,12 +50,35 @@ public class DockerService {
     /* ZeroMQ publisher for broadcasting status updates */
     private final DockerStatusPublisher statusPublisher;
 
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    private ScheduledFuture<?> statusBroadcastTask;
+
     public DockerService(DockerClient dockerClient, InstanceTracker instanceTracker, DockerRepository dockerRepository,
                          DockerStatusPublisher statusPublisher) {
         this.dockerClient = dockerClient;
         this.instanceTracker = instanceTracker;
         this.dockerRepo = dockerRepository;
         this.statusPublisher = statusPublisher;
+    }
+
+    @Transactional
+    public DockerServiceConfig createConfig(DockerServiceConfigRequest request) {
+        DockerServiceConfig config = new DockerServiceConfig();
+        config.setName(request.getName());
+        config.setContainerName(request.getContainerName());
+        config.setDescription(request.getDescription());
+        config.setImage(request.getImage());
+        config.setCommand(request.getCommand());
+        config.setEntrypoint(request.getEntrypoint());
+        config.setRestartPolicy(request.getRestartPolicy());
+        config.setNetworkMode(request.getNetworkMode());
+        config.setNetworkName(request.getNetworkName());
+
+        addPorts(config, request.getPorts());
+        addEnvVars(config, request.getEnvVars());
+        addVolumeMappings(config, request.getVolumes());
+
+        return dockerRepo.save(config);
     }
 
     public String startContainer(Long configId) {
@@ -127,6 +159,8 @@ public class DockerService {
             // Start
             dockerClient.startContainerCmd(resp.getId()).exec();
 
+            ensureStatusBroadcasting();
+
             // You might record this in a DockerContainerInstance table here
             return resp.getId();
         } catch (DockerException e) {
@@ -182,6 +216,37 @@ public class DockerService {
     public DockerStatusEvent broadcastContainerStatuses() {
         List<DockerContainerStatus> statuses = getContainerStatuses();
         return statusPublisher.publishStatuses(statuses);
+    }
+
+    private void ensureStatusBroadcasting() {
+        synchronized (this) {
+            if (statusBroadcastTask != null && !statusBroadcastTask.isDone()) {
+                return;
+            }
+
+            statusBroadcastTask = scheduler.scheduleAtFixedRate(() -> {
+                try {
+                    List<DockerContainerStatus> statuses = getContainerStatuses();
+                    statusPublisher.publishStatuses(statuses);
+
+                    boolean anyRunning = statuses.stream().anyMatch(DockerContainerStatus::getRunning);
+                    if (!anyRunning) {
+                        stopStatusBroadcasting();
+                    }
+                } catch (Exception e) {
+                    log.error("Failed to publish Docker status update", e);
+                }
+            }, 0, 5, TimeUnit.SECONDS);
+        }
+    }
+
+    private void stopStatusBroadcasting() {
+        synchronized (this) {
+            if (statusBroadcastTask != null) {
+                statusBroadcastTask.cancel(false);
+                statusBroadcastTask = null;
+            }
+        }
     }
 
     private DockerContainerStatus buildStatus(DockerServiceConfig cfg, InspectContainerResponse container) {
@@ -378,5 +443,50 @@ public class DockerService {
 
         // Fallback; or return null / throw
         return RestartPolicy.parse(p);
+    }
+
+    private void addPorts(DockerServiceConfig config, List<DockerPortMappingRequest> requests) {
+        if (requests == null) {
+            return;
+        }
+
+        for (DockerPortMappingRequest request : requests) {
+            DockerPortMapping mapping = new DockerPortMapping();
+            mapping.setConfig(config);
+            mapping.setContainerPort(request.getContainerPort());
+            mapping.setHostPort(request.getHostPort());
+            mapping.setProtocol(request.getProtocol());
+            config.getPorts().add(mapping);
+        }
+    }
+
+    private void addEnvVars(DockerServiceConfig config, List<DockerEnvVarRequest> requests) {
+        if (requests == null) {
+            return;
+        }
+
+        for (DockerEnvVarRequest request : requests) {
+            DockerEnvVar envVar = new DockerEnvVar();
+            envVar.setConfig(config);
+            envVar.setName(request.getName());
+            envVar.setValue(request.getValue());
+            envVar.setSecret(request.isSecret());
+            config.getEnvVars().add(envVar);
+        }
+    }
+
+    private void addVolumeMappings(DockerServiceConfig config, List<DockerVolumeMappingRequest> requests) {
+        if (requests == null) {
+            return;
+        }
+
+        for (DockerVolumeMappingRequest request : requests) {
+            DockerVolumeMapping volumeMapping = new DockerVolumeMapping();
+            volumeMapping.setConfig(config);
+            volumeMapping.setHostPathOrVolume(request.getHostPathOrVolume());
+            volumeMapping.setContainerPath(request.getContainerPath());
+            volumeMapping.setMode(request.getMode());
+            config.getVolumes().add(volumeMapping);
+        }
     }
 }
