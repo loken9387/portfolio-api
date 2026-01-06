@@ -61,6 +61,16 @@ public class DockerService {
         this.statusPublisher = statusPublisher;
     }
 
+    public List<DockerServiceConfig> getConfigs() {
+        return dockerRepo.findAll();
+    }
+
+    public DockerServiceConfig getConfig(Long id) {
+        return dockerRepo.findById(id).orElseThrow(() -> new IllegalArgumentException(
+                "No DockerServiceConfig with id " + id
+        ));
+    }
+
     @Transactional
     public DockerServiceConfig createConfig(DockerServiceConfigRequest request) {
         DockerServiceConfig config = new DockerServiceConfig();

@@ -27,6 +27,17 @@ public class DockerController {
         this.dockerService = dockerService;
     }
 
+    @GetMapping("/configs")
+    public List<DockerServiceConfig> getConfigs() {
+        return dockerService.getConfigs();
+    }
+
+    @GetMapping("/configs/{configId}")
+    public ResponseEntity<DockerServiceConfig> getConfig(@PathVariable Long configId) {
+        DockerServiceConfig config = dockerService.getConfig(configId);
+        return ResponseEntity.ok(config);
+    }
+
     @PostMapping("/configs")
     public ResponseEntity<DockerServiceConfig> createConfig(@RequestBody DockerServiceConfigRequest request) {
         DockerServiceConfig created = dockerService.createConfig(request);
