@@ -1,4 +1,6 @@
 package com.frausto.web.docker;
+import com.frausto.model.docker.dto.DockerServiceConfigRequest;
+import com.frausto.model.docker.entity.DockerServiceConfig;
 import com.frausto.proto.service.DockerContainerStatus;
 import com.frausto.proto.service.DockerStatusEvent;
 import com.frausto.service.docker.DockerService;
@@ -7,6 +9,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -22,6 +25,12 @@ public class DockerController {
 
     public DockerController(DockerService dockerService) {
         this.dockerService = dockerService;
+    }
+
+    @PostMapping("/configs")
+    public ResponseEntity<DockerServiceConfig> createConfig(@RequestBody DockerServiceConfigRequest request) {
+        DockerServiceConfig created = dockerService.createConfig(request);
+        return ResponseEntity.ok(created);
     }
 
     @PostMapping("/configs/{configId}/start")

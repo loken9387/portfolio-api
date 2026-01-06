@@ -18,6 +18,10 @@ public class DockerPortMapping {
     private Integer hostPort;
     private String protocol; // "tcp" or "udp"
 
+    public DockerPortMapping() {
+        // JPA
+    }
+
     public DockerPortMapping(Long id, DockerServiceConfig config, Integer containerPort, Integer hostPort, String protocol) {
         this.id = id;
         this.config = config;

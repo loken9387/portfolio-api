@@ -18,6 +18,10 @@ public class DockerEnvVar {
     private String value;
     private boolean secret;    // true = value is a placeholder, real value from env/secret store
 
+    public DockerEnvVar() {
+        // JPA
+    }
+
     public DockerEnvVar(Long id, DockerServiceConfig config, String name, String value, boolean secret) {
         this.id = id;
         this.config = config;

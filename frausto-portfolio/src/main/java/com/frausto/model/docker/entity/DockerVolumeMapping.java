@@ -18,6 +18,10 @@ public class DockerVolumeMapping {
     private String containerPath;
     private String mode; // "ro"/"rw"
 
+    public DockerVolumeMapping() {
+        // JPA
+    }
+
     public DockerVolumeMapping(Long id, DockerServiceConfig config, String hostPathOrVolume, String containerPath, String mode) {
         this.id = id;
         this.config = config;

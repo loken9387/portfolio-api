@@ -37,6 +37,10 @@ public class DockerServiceConfig {
     @OneToMany(mappedBy = "config", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<DockerVolumeMapping> volumes = new ArrayList<>();
 
+    public DockerServiceConfig() {
+        // JPA
+    }
+
     public DockerServiceConfig(Long id, String name, String containerName, String description, String image,
                                String command, String entrypoint, String restartPolicy, String networkMode,
                                String networkName, List<DockerPortMapping> ports, List<DockerEnvVar> envVars,
