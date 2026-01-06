@@ -1,5 +1,6 @@
 package com.frausto.model.docker.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import jakarta.persistence.*;
 
 import java.util.Objects;
@@ -12,6 +13,7 @@ public class DockerVolumeMapping {
     private Long id;
 
     @ManyToOne(fetch = FetchType.LAZY)
+    @JsonIgnore
     private DockerServiceConfig config;
 
     private String hostPathOrVolume;
