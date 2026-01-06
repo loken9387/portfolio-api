@@ -1,5 +1,6 @@
 package com.frausto.config;
 
+import com.frausto.web.terminal.TerminalWebSocketHandler;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.socket.WebSocketHandler;
 import org.springframework.web.socket.config.annotation.EnableWebSocket;
@@ -11,7 +12,7 @@ import org.springframework.web.socket.config.annotation.WebSocketHandlerRegistry
 public class TerminalWebSocketConfig implements WebSocketConfigurer {
     private final TerminalWebSocketHandler terminalWebSocketHandler;
 
-    public TerminalWebSocketConfig(TerminalWebSockerHandler terminalWebSockerHandler) {
+    public TerminalWebSocketConfig(TerminalWebSocketHandler terminalWebSockerHandler) {
         this.terminalWebSocketHandler = terminalWebSockerHandler;
     }
 
