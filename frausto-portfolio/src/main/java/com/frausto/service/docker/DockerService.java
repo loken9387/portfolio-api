@@ -37,6 +37,10 @@ import java.util.concurrent.TimeUnit;
 @Service
 public class DockerService {
     private static final Logger log = LoggerFactory.getLogger(DockerService.class);
+    private static final String LABEL_CONFIG_ID = "portfolio.config.id";
+    private static final String LABEL_CONFIG_NAME = "portfolio.config.name";
+    private static final String LABEL_MANAGED_BY = "portfolio.managed.by";
+    private static final String LABEL_MANAGED_BY_VALUE = "portfolio-api";
 
     /* Docker client for interacting with the docker daemon */
     private final DockerClient dockerClient;
@@ -109,8 +113,9 @@ public class DockerService {
 
         // Container labels help us correlate configs to running containers
         Map<String, String> labels = new HashMap<>();
-        labels.put("portfolio.config.id", String.valueOf(cfg.getId()));
-        labels.put("portfolio.config.name", cfg.getName());
+        labels.put(LABEL_CONFIG_ID, String.valueOf(cfg.getId()));
+        labels.put(LABEL_CONFIG_NAME, cfg.getName());
+        labels.put(LABEL_MANAGED_BY, LABEL_MANAGED_BY_VALUE);
         cmd.withLabels(labels);
 
         // Entrypoint/command overrides
@@ -179,6 +184,29 @@ public class DockerService {
         }
     }
 
+    public void reconcileStartupContainers() {
+        List<InspectContainerResponse> existing = findManagedContainers(true);
+        for (InspectContainerResponse container : existing) {
+            String containerId = container.getId();
+            try {
+                dockerClient.removeContainerCmd(containerId)
+                        .withForce(true)
+                        .withRemoveVolumes(true)
+                        .exec();
+                log.info("Removed managed container {} during startup reconciliation", containerId);
+            } catch (DockerException e) {
+                throw new RuntimeException("Failed to remove container " + containerId + " during startup reconciliation", e);
+            }
+        }
+
+        List<DockerServiceConfig> configs = dockerRepo.findAll();
+        for (DockerServiceConfig config : configs) {
+            if (isExpectedToRun(config)) {
+                startContainer(config.getId());
+            }
+        }
+    }
+
     public void removeContainersForConfig(Long configId, boolean force) {
         List<InspectContainerResponse> containers = findContainersByConfig(configId, true);
         for (InspectContainerResponse container : containers) {
@@ -203,12 +231,12 @@ public class DockerService {
         List<InspectContainerResponse> inspectedContainers = findContainersByConfig(null, true);
 
         Map<Long, List<InspectContainerResponse>> containersByConfig = inspectedContainers.stream()
-                .collect(Collectors.groupingBy(c -> Long.parseLong(c.getConfig().getLabels().get("portfolio.config.id"))));
+                .collect(Collectors.groupingBy(c -> Long.parseLong(c.getConfig().getLabels().get(LABEL_CONFIG_ID))));
 
         List<DockerContainerStatus> statuses = new ArrayList<>();
 
         for (InspectContainerResponse container : inspectedContainers) {
-            Long cfgId = Long.parseLong(container.getConfig().getLabels().get("portfolio.config.id"));
+            Long cfgId = Long.parseLong(container.getConfig().getLabels().get(LABEL_CONFIG_ID));
             DockerServiceConfig cfg = configsById.get(cfgId);
             statuses.add(buildStatus(cfg, container));
         }
@@ -310,10 +338,22 @@ public class DockerService {
     private List<InspectContainerResponse> findContainersByConfig(Long configId, boolean includeStopped) {
         ListContainersCmd listCmd = dockerClient.listContainersCmd().withShowAll(includeStopped);
         if (configId != null) {
-            listCmd.withLabelFilter(Map.of("portfolio.config.id", String.valueOf(configId)));
+            listCmd.withLabelFilter(Map.of(LABEL_CONFIG_ID, String.valueOf(configId)));
         } else {
-            listCmd.withLabelFilter(Map.of("portfolio.config.id", ""));
+            listCmd.withLabelFilter(Map.of(LABEL_CONFIG_ID, ""));
         }
+
+        List<Container> containers = listCmd.exec();
+        List<InspectContainerResponse> inspected = new ArrayList<>();
+        for (Container container : containers) {
+            inspected.add(dockerClient.inspectContainerCmd(container.getId()).exec());
+        }
+        return inspected;
+    }
+
+    private List<InspectContainerResponse> findManagedContainers(boolean includeStopped) {
+        ListContainersCmd listCmd = dockerClient.listContainersCmd().withShowAll(includeStopped)
+                .withLabelFilter(Map.of(LABEL_MANAGED_BY, LABEL_MANAGED_BY_VALUE));
 
         List<Container> containers = listCmd.exec();
         List<InspectContainerResponse> inspected = new ArrayList<>();

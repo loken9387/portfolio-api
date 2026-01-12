@@ -9,12 +9,14 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 
 @Configuration
 public class DockerConfigInitializer {
     private static final Logger log = LoggerFactory.getLogger(DockerConfigInitializer.class);
 
     @Bean
+    @Order(1)
     CommandLineRunner seedDefaultDockerConfig(DockerRepository dockerRepository, DockerService dockerService) {
         return args -> {
             boolean hasConfigs = dockerRepository.count() > 0;
@@ -32,6 +34,15 @@ public class DockerConfigInitializer {
 
             DockerServiceConfig created = dockerService.createConfig(defaultConfig);
             log.info("Seeded default Docker config with id {}", created.getId());
+        };
+    }
+
+    @Bean
+    @Order(2)
+    CommandLineRunner startManagedContainers(DockerService dockerService) {
+        return args -> {
+            log.info("Reconciling managed containers on startup");
+            dockerService.reconcileStartupContainers();
         };
     }
 }
