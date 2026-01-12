@@ -184,6 +184,7 @@ public class DockerService {
         }
     }
 
+    @Transactional
     public void reconcileStartupContainers() {
         List<InspectContainerResponse> existing = findManagedContainers(true);
         for (InspectContainerResponse container : existing) {
